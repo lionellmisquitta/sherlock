@@ -1,0 +1,73 @@
+name: Run Sherlock OSINT
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: "Public username to search (not an email address)"
+        required: true
+        type: string
+      site_catalog:
+        description: "Website list to use"
+        required: true
+        type: choice
+        default: online
+        options:
+          - online
+          - bundled
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    name: Search public username
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out Sherlock
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Sherlock from this fork
+        run: python -m pip install .
+
+      - name: Search public websites
+        shell: bash
+        env:
+          SEARCH_USERNAME: ${{ inputs.username }}
+          SITE_CATALOG: ${{ inputs.site_catalog }}
+        run: |
+          set -euo pipefail
+          mkdir -p results
+
+          # Keep the input within ordinary username characters.
+          # This workflow does not accept email addresses.
+          if [[ ! "$SEARCH_USERNAME" =~ ^[A-Za-z0-9_.-]{1,64}$ ]]; then
+            echo "::error::Enter a username of 1-64 letters, digits, dots, underscores, or hyphens (not an email)."
+            exit 1
+          fi
+
+          if [[ "$SITE_CATALOG" == "bundled" ]]; then
+            sherlock "$SEARCH_USERNAME" --local --csv --xlsx --folderoutput results --no-color
+          else
+            # First try the online site catalog. If its server is unavailable,
+            # --local uses the checked-in catalog while still searching live websites.
+            if ! sherlock "$SEARCH_USERNAME" --csv --xlsx --folderoutput results --no-color; then
+              echo "Online catalog unavailable; retrying with the bundled list (live website searches)."
+              sherlock "$SEARCH_USERNAME" --local --csv --xlsx --folderoutput results --no-color
+            fi
+          fi
+
+      - name: Upload downloadable results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sherlock-results
+          path: results/
+          if-no-files-found: warn
+          retention-days: 7
